@@ -10,7 +10,9 @@
 
 #define NUM_CORES 8
 #define NUM_SMALL_CORES 4
-#define MIGRATION_THRESHOLD 0
+#define SLEEP_AFTER_TICKS 0
+#define P_BIG   P3
+#define P_SMALL P3
 
 enum CoreStatus {
     IDLE,
@@ -19,10 +21,16 @@ enum CoreStatus {
     WAKING
 };
 
+void SetSpeed(CPUId_t core) {
+    // cores 0-3 are big, 4-7 are small
+    SetPState(core, core < NUM_SMALL_CORES ? P_BIG : P_SMALL);
+}
+
 std::queue<ProcessId_t> readyQ;
 ProcessId_t running[NUM_CORES] = {InvalidProcessId(), InvalidProcessId(), InvalidProcessId(), InvalidProcessId(), InvalidProcessId(), InvalidProcessId(), InvalidProcessId(), InvalidProcessId()};
 ProcessId_t pending[NUM_CORES] = {InvalidProcessId(), InvalidProcessId(), InvalidProcessId(), InvalidProcessId(), InvalidProcessId(), InvalidProcessId(), InvalidProcessId(), InvalidProcessId()};
 CoreStatus coreStatus[NUM_CORES] = {READY, READY, READY, READY, READY, READY, READY, READY};
+int idleTicks[NUM_CORES] = {0, 0, 0, 0, 0, 0, 0, 0};
 
 CPUId_t FindAvailableCore(ProcessId_t pid) {
     for(CPUId_t core = NUM_SMALL_CORES; core < NUM_CORES; core++) {
@@ -87,8 +95,10 @@ void CreateProcess(ProcessId_t pid) {
             pending[core] = InvalidProcessId();
             running[core] = pid;
             coreStatus[core] = RUNNING;
+            idleTicks[core] = 0;
             LoadContext(pid, core);
             RunCore(core);
+            SetSpeed(core);
             std::cout << "Running Process " + std::to_string(pid) + " on Core " + std::to_string(core) << std::endl;
         }
     } else {  // There is already a running process
@@ -107,19 +117,18 @@ void ExitProcess(ProcessId_t pid) {
         ProcessId_t next = readyQ.front();
         readyQ.pop();
         running[core] = next;
+        idleTicks[core] = 0;
         LoadContext(next, core);
         RunCore(core);
+        SetSpeed(core);
         std::cout << "Loading Next Process " + std::to_string(next) + " on Core " + std::to_string(core) << std::endl;
     }
     else {
         running[core] = InvalidProcessId();
-        if(core < NUM_SMALL_CORES) {
-            coreStatus[core] = IDLE;
-            SetCState(core, C6);
-            std::cout << "Sleeping Core " + std::to_string(core) << std::endl;
-        } else {
-            coreStatus[core] = READY;
-        }
+        coreStatus[core] = READY;
+        idleTicks[core] = 0;
+        // SetCState(core, C6);
+        // std::cout << "Sleeping Core " + std::to_string(core) << std::endl;
     }
 }
 
@@ -134,47 +143,22 @@ void TimerInterrupt(Time_t now) {
                 pending[core] = InvalidProcessId();
                 running[core] = next;
                 coreStatus[core] = RUNNING;
+                idleTicks[core] = 0;
                 LoadContext(next, core);
                 RunCore(core);
+                SetSpeed(core);
                 std::cout << "Running Process " + std::to_string(next) + " on Core " + std::to_string(core) << std::endl;
             }
             readyQ.pop();
         }
     }
-
-    // Migration Logic
-    // CPUId_t big_core = 0;
-    // while(core >= NUM_SMALL_CORES && core < NUM_CORES && big_core < NUM_SMALL_CORES) {
-    //     std::cout << "Checking Migration for Process " + std::to_string(running[big_core]) + " with Time: " + FormatTime(GetRemaining(running[big_core])) << std::endl;
-    //     if(GetRemaining(running[big_core]) > MIGRATION_THRESHOLD) {
-    //         std::cout << "Trying to Migrate Process " + std::to_string(running[big_core]) + " with Time: " + FormatTime(GetRemaining(running[big_core])) << std::endl;
-    //         core = FindReadySmallCore(running[big_core]);
-    //         if(core != NUM_CORES) {
-    //             std::cout << "Migrating Process " + std::to_string(running[big_core]) + " to Core " + std::to_string(core) << std::endl;
-    //             coreStatus[big_core] = READY;
-    //             coreStatus[core] = RUNNING;
-    //             SaveContext(running[big_core], big_core);
-    //             LoadContext(pending[core], core);
-    //             RunCore(core);
-    //             running[big_core] = InvalidProcessId();
-    //             running[core] = pending[core];
-    //             pending[core] = InvalidProcessId();
-    //             big_core++;
-    //         }
-    //     }
-    // }
-
-    if(readyQ.empty()) {
-        bool found_sleep = false;
-        CPUId_t sleep_core = 7;
-        while(sleep_core >= NUM_SMALL_CORES && !found_sleep) {
-            if(coreStatus[sleep_core] == READY) {
-                coreStatus[sleep_core] = IDLE;
-                SetCState(sleep_core, C6);
-                std::cout << "Sleeping Small Core " + std::to_string(sleep_core) << std::endl;
-                found_sleep = true;
+    // Put cores to sleep once they have been idle for SLEEP_AFTER_TICKS ticks.
+    for(CPUId_t c = 0; c < NUM_CORES; c++) {
+        if(coreStatus[c] == READY && pending[c] == InvalidProcessId()) {
+            if(++idleTicks[c] >= SLEEP_AFTER_TICKS) {
+                SetCState(c, C6);
+                coreStatus[c] = IDLE;
             }
-            sleep_core--;
         }
     }
 }
@@ -182,9 +166,9 @@ void TimerInterrupt(Time_t now) {
 void CStateTransitionComplete(CPUId_t core_id){
     if(coreStatus[core_id] == WAKING) {
         std::cout << "Process " + std::to_string(pending[core_id]) + " Ready to Run on Transitioned Core " + std::to_string(core_id) << std::endl;
-        SetPState(core_id, P0);
         LoadContext(pending[core_id], core_id);
         RunCore(core_id);
+        SetSpeed(core_id);
         coreStatus[core_id] = RUNNING;
         running[core_id] = pending[core_id];
         pending[core_id] = InvalidProcessId();
