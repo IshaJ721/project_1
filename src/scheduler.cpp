@@ -10,7 +10,7 @@
 
 #define NUM_CORES 8
 #define NUM_SMALL_CORES 4
-#define SLEEP_AFTER_TICKS 0
+#define SLEEP_AFTER_TICKS 2
 #define P_BIG   P3
 #define P_SMALL P3
 
@@ -38,7 +38,10 @@ CPUId_t FindAvailableCore(ProcessId_t pid) {
             std::cout << " Process " + std::to_string(pid) + " Pending on Ready Core " + std::to_string(core) << std::endl;
             pending[core] = pid;
             return core;
-        } else if(coreStatus[core] == IDLE && pending[core] == InvalidProcessId()) {
+        }
+    }
+    for(CPUId_t core = NUM_SMALL_CORES; core < NUM_CORES; core++) {
+        if(coreStatus[core] == IDLE && pending[core] == InvalidProcessId()) {
             std::cout << " Process " + std::to_string(pid) + " Pending on Idle Core " + std::to_string(core) << std::endl;
             pending[core] = pid;
             SetCState(core, C1);
@@ -51,7 +54,10 @@ CPUId_t FindAvailableCore(ProcessId_t pid) {
             std::cout << " Process " + std::to_string(pid) + " Pending on Ready Core " + std::to_string(core) << std::endl;
             pending[core] = pid;
             return core;
-        } else if(coreStatus[core] == IDLE && pending[core] == InvalidProcessId()) {
+        }
+    }
+    for(CPUId_t core = 0; core < NUM_SMALL_CORES; core++) {
+        if(coreStatus[core] == IDLE && pending[core] == InvalidProcessId()) {
             std::cout << " Process " + std::to_string(pid) + " Pending on Idle Core " + std::to_string(core) << std::endl;
             pending[core] = pid;
             SetCState(core, C1);
